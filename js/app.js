@@ -227,7 +227,8 @@ function parseOrderText(text) {
     const em = out.email.match(/^(.+?@\S+?)\s+([A-Za-z][A-Za-z0-9 .#\-]{1,20})$/);
     if (em) out.email = em[1];
   }
-  out.recipient = out.recipient || findLineValue(/收\s*件\s*人\s*(?:姓\s*名)?\s+([A-Za-z][^\s].*?)(?=\s+收件人|\s+电话|\s+邮箱|$)/i);
+  //  firstName 可能是 É / Ø / Å / Ł 等拉丁扩展字符，不能只用 A-Za-z 起头
+  out.recipient = out.recipient || findLineValue(/收\s*件\s*人\s*(?:姓\s*名)?\s+([A-Za-z\u00C0-\u024F][^\s].*?)(?=\s+收件人|\s+电话|\s+邮箱|$)/i);
   out.postcode = out.postcode || findLineValue(/邮\s*[编邹]\s+(\S+)/);
   if (!out.postcode) {
     const pc = full.match(/\b[A-Z]{1,2}\d{1,2}[A-Z]?\s*\d[A-Z]{2}\b/)
@@ -281,6 +282,34 @@ function parseOrderText(text) {
 }
 
 /* ---------- OCR 识别 ---------- */
+// 正则转义，用于按国家词典做整词纠偏
+function escapeRe(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+// 按国家词典恢复被 OCR 丢失的变音符号；只匹配整词，且不改变大小写风格。
+function applyWordFixes(text, dict) {
+  if (!dict) return text;
+  Object.entries(dict).forEach(([from, to]) => {
+    if (from === to) return;
+    const re = new RegExp('\\b' + escapeRe(from) + '\\b', 'gi');
+    text = text.replace(re, m => {
+      if (m === m.toUpperCase()) return to.toUpperCase();
+      if (m[0] === m[0].toUpperCase()) return to.charAt(0).toUpperCase() + to.slice(1);
+      return to;
+    });
+  });
+  return text;
+}
+
+function restoreLatinDiacritics(text, countryCode) {
+  return applyWordFixes(text || '', OCR_DIACRITIC_FIXES[countryCode]);
+}
+
+// 根据当前模板的收件国家选择附加 OCR 语言；未选模板时保持中英双语。
+function getOcrCountryCode() {
+  const t = getTemplate(state.currentTemplateId);
+  return (t && t.country) || '';
+}
+
 // 图像预处理：2x 放大 + 灰度 + 对比度拉伸，显著提升 Tesseract 对小字截图的识别率
 async function preprocessImage(file) {
   const img = await createImageBitmap(file);
@@ -306,19 +335,36 @@ async function recognizeScreenshot(file) {
   const statusEl = document.getElementById('ocrStatus');
   statusEl.style.display = 'block';
   statusEl.textContent = '正在预处理截图…';
+  let worker = null;
   try {
-    if (!window.Tesseract) throw new Error('OCR 引擎未加载');
+    if (!window.Tesseract || !Tesseract.createWorker) throw new Error('OCR 引擎未加载');
     const processed = await preprocessImage(file);
-    statusEl.textContent = '正在识别截图文字（中英双语，首次需加载语言包，请稍候）…';
-    // 截图是中文界面+英文值，必须用 chi_sim+eng 双语；语言包指向本地目录，离线可用
-    const result = await Tesseract.recognize(processed, 'chi_sim+eng', {
-      langPath: 'vendor/tessdata',
-      logger: m => {
-        if (m.status === 'recognizing text') statusEl.textContent = `识别中… ${Math.round(m.progress*100)}%`;
-        else if (m.status === 'loading language traineddata') statusEl.textContent = '正在加载中文语言包…';
-      }
-    });
-    const text = result.data.text || '';
+    const country = getOcrCountryCode();
+    const extraLang = OCR_LANG_BY_COUNTRY[country] || '';
+    const langs = extraLang ? ['chi_sim', 'eng', extraLang] : ['chi_sim', 'eng'];
+    const langLabel = extraLang ? `中/英/${extraLang}` : '中/英';
+    // 基础语言包走本地目录保证离线可用；附加欧洲语言包按需从 CDN 加载并缓存到浏览器。
+    const langPath = extraLang ? 'https://tessdata.projectnaptha.com/4.0.0' : 'vendor/tessdata';
+    statusEl.textContent = `正在识别截图文字（${langLabel}，首次需加载语言包，请稍候）…`;
+    const logger = m => {
+      if (m.status === 'recognizing text') statusEl.textContent = `识别中… ${Math.round(m.progress*100)}%`;
+      else if (/language|traineddata/i.test(m.status || '')) statusEl.textContent = `正在加载 ${langLabel} 语言包…`;
+    };
+    try {
+      worker = await Tesseract.createWorker(langs, 1, { langPath, gzip: true, cacheMethod: 'write', logger });
+    } catch (loadErr) {
+      if (!extraLang) throw loadErr;
+      // 附加语言包不可用时退回本地中英双语，避免整个 OCR 失败
+      worker = await Tesseract.createWorker(['chi_sim','eng'], 1, { langPath: 'vendor/tessdata', logger });
+    }
+    try {
+      await worker.setParameters({
+        user_defined_dpi: '300',
+        preserve_interword_spaces: '1'
+      });
+    } catch (_) { /* 老版本引擎不支持时忽略 */ }
+    const result = await worker.recognize(processed);
+    let text = restoreLatinDiacritics(result.data.text || '', country);
     statusEl.textContent = '识别完成，请在下方核对字段';
     setTimeout(()=>statusEl.style.display='none', 2000);
     return { text, fields: parseOrderText(text) };
@@ -326,6 +372,8 @@ async function recognizeScreenshot(file) {
     statusEl.textContent = '识别失败：' + e.message + ' —— 请改用"粘贴文本"方式';
     toast('OCR 识别失败，请改用"粘贴文本"方式', 'error');
     return { text:'', fields:{} };
+  } finally {
+    if (worker) { try { await worker.terminate(); } catch (_) {} }
   }
 }
 

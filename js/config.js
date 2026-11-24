@@ -105,6 +105,39 @@ const COUNTRY_CODE_MAP = {
   'canada': 'CA', '加拿大': 'CA',
   'australia': 'AU', '澳大利亚': 'AU',
   'china': 'CN', '中国': 'CN',
+  // 欧洲国家本地语言写法（OCR 常按截图原文输出）
+  'deutschland': 'DE', 'osterreich': 'AT', 'österreich': 'AT', 'schweiz': 'CH', 'suisse': 'CH',
+  'espana': 'ES', 'españa': 'ES', 'italia': 'IT', 'nederland': 'NL', 'belgie': 'BE', 'belgië': 'BE',
+  'sverige': 'SE', 'norge': 'NO', 'danmark': 'DK', 'suomi': 'FI', 'polska': 'PL', 'irland': 'IE'
+};
+
+// OCR 语言增强：按收件国家加载对应的拉丁语系 traineddata，提升带变音符号字符的识别率。
+// 仅在 eng 基础上叠加一种语言，避免同时加载多语种导致互相干扰。
+const OCR_LANG_BY_COUNTRY = {
+  DE: 'deu', AT: 'deu', CH: 'deu',
+  FR: 'fra', BE: 'fra',
+  ES: 'spa', IT: 'ita', PT: 'por',
+  NL: 'nld', PL: 'pol', SE: 'swe', NO: 'nor', DK: 'dan', FI: 'fin',
+  IE: 'gle'
+};
+
+// OCR 常见“无变音符号转写”纠偏词典：仅在对应国家启用，避免误伤普通英文单词。
+const OCR_DIACRITIC_FIXES = {
+  DE: { Munchen:'München', Muenchen:'München', Koln:'Köln', Koeln:'Köln', Dusseldorf:'Düsseldorf', Duesseldorf:'Düsseldorf', Strasse:'Straße', Strase:'Straße', Stuttgart:'Stuttgart' },
+  AT: { Wien:'Wien', Salzburg:'Salzburg', Graz:'Graz', Innsbruck:'Innsbruck', Strasse:'Straße' },
+  CH: { Zurich:'Zürich', Geneve:'Genève', Lausanne:'Lausanne', Bern:'Bern', Basel:'Basel', Strasse:'Straße' },
+  FR: { Geneve:'Genève', Nimes:'Nîmes', Andre:'André', Renee:'Renée', Chloe:'Chloé', Cafe:'Café' },
+  BE: { Bruxelles:'Bruxelles', Anvers:'Anvers', Liege:'Liège', Andre:'André' },
+  ES: { Espana:'España', Malaga:'Málaga', Jose:'José', Andres:'Andrés', Garcia:'García', Munoz:'Muñoz', Lopez:'López' },
+  IT: { Milano:'Milano', Roma:'Roma', Napoli:'Napoli', Firenze:'Firenze', Giuseppe:'Giuseppe' },
+  PT: { Sao:'São', Joao:'João', Lisboa:'Lisboa', Porto:'Porto' },
+  NL: { Amsterdam:'Amsterdam', Rotterdam:'Rotterdam', Maastricht:'Maastricht', Den:'Den' },
+  PL: { Krakow:'Kraków', Gdansk:'Gdańsk', Lodz:'Łódź', Wroclaw:'Wrocław', Poznan:'Poznań' },
+  SE: { Goteborg:'Göteborg', Malmo:'Malmö', Linkoping:'Linköping', Jonkoping:'Jönköping', Orebro:'Örebro' },
+  NO: { Bodo:'Bodø', Alesund:'Ålesund', Tromso:'Tromsø', Kristiansand:'Kristiansand' },
+  DK: { Kobenhavn:'København', Aarhus:'Århus', Aalborg:'Ålborg', Odense:'Odense' },
+  FI: { Helsinki:'Helsinki', Tampere:'Tampere', Turku:'Turku', Espoo:'Espoo' },
+  IE: { Sinead:'Sinéad', Aine:'Áine', Dublin:'Dublin', Cork:'Cork' }
 };
 
 // 默认模板配置（3个模板）
