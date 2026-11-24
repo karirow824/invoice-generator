@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>发票生成器 · Invoice Generator</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📄</text></svg>">
+<link rel="stylesheet" href="styles.css">
+<script src="vendor/exceljs.min.js"></script>
+<script src="vendor/xlsx.full.min.js"></script>
+<script src="vendor/jszip.min.js"></script>
+<script src="vendor/tesseract.min.js"></script>
+<script src="js/config.js"></script>
+<script src="js/app.js"></script>
+</head>
+<body>
+<div class="app">
+  <!-- 侧边栏 -->
+  <aside class="sidebar">
+    <div class="brand"><span class="brand-icon">📄</span><div><strong>发票生成器</strong><small>Invoice Generator</small></div></div>
+    <nav class="nav">
+      <div class="nav-item active" data-view="generate"><span class="nav-icon">✨</span> 生成发票</div>
+      <div class="nav-item" data-view="batch"><span class="nav-icon">📦</span> 批量生成</div>
+      <div class="nav-item" data-view="templates"><span class="nav-icon">⚙️</span> 模板管理</div>
+      <div class="nav-item" data-view="history"><span class="nav-icon">🕘</span> 生成记录</div>
+      <div class="nav-item" data-view="settings"><span class="nav-icon">🔧</span> 设置</div>
+    </nav>
+    <div class="sidebar-foot">纯本地运行 · 数据不上传</div>
+  </aside>
+
+  <!-- 主内容 -->
+  <main class="main">
+    <!-- 生成发票 -->
+    <section id="view-generate" class="view active">
+      <header class="page-head"><h1>生成发票</h1><p>上传订单截图，自动识别并填入模板</p></header>
+
+      <div class="card">
+        <div class="card-title">① 选择模板</div>
+        <div class="row"><select id="genTemplate" class="select"></select></div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">② 上传订单截图</div>
+        <div class="upload-box" onclick="document.getElementById('screenshotInput').click()">
+          <div class="upload-icon">📷</div>
+          <div>点击上传订单截图</div>
+          <small>上传后自动识别文字并提取字段</small>
+        </div>
+        <input type="file" id="screenshotInput" accept="image/*" style="display:none">
+        <div id="ocrStatus" class="ocr-status" style="display:none"></div>
+        <div class="paste-area">
+          <label>识别出的原始文字（识别不准时可在此修正，再点「重新解析」）：</label>
+          <textarea id="rawText" rows="6" placeholder="上传截图后，识别出的文字会显示在这里"></textarea>
+          <button id="btnParseText" class="btn btn-outline">重新解析文字 →</button>
+        </div>
+      </div>
+
+      <div id="stepPreview" class="card" style="display:none">
+        <div class="card-title">③ 核对字段 <span class="card-hint">留空的字段不会写入模板</span></div>
+        <div id="fieldForm" class="field-form"></div>
+        <div class="row" style="margin-top:16px">
+          <label class="inline-label">输出文件名：</label>
+          <input type="text" id="genFileName" class="input" placeholder="留空则按平台单号自动生成" style="flex:1">
+        </div>
+        <div class="row" style="margin-top:16px;gap:12px">
+          <button id="btnGenerate" class="btn btn-primary btn-lg">生成 Excel 发票</button>
+        </div>
+        <div id="genResult" style="margin-top:12px"></div>
+      </div>
+    </section>
+
+    <!-- 批量生成 -->
+    <section id="view-batch" class="view">
+      <header class="page-head"><h1>批量生成</h1><p>导入任意格式的订单明细，智能识别列后批量生成发票</p></header>
+
+      <div class="card">
+        <div class="card-title">① 上传订单明细（任意格式）</div>
+        <div class="upload-box" onclick="document.getElementById('batchInput').click()">
+          <div class="upload-icon">📊</div>
+          <div>点击上传订单明细 Excel / CSV</div>
+          <small>不限模板与列名，支持不同海外仓导出的表格；下一步可指定哪些列对应发票字段</small>
+        </div>
+        <input type="file" id="batchInput" accept=".xlsx,.xls,.csv" style="display:none">
+        <div id="batchInfo" class="info-line" style="display:none"></div>
+      </div>
+
+      <div id="batchStep2" class="card" style="display:none">
+        <div class="card-title">② 读取设置</div>
+        <div class="form-grid">
+          <label class="form-field"><span>工作表</span><select id="batchSheet"></select></label>
+          <label class="form-field"><span>表头所在行</span><input type="number" id="batchHeaderRow" value="1" min="1" max="50"></label>
+        </div>
+        <button id="btnReloadSheet" class="btn btn-sm btn-outline" style="margin-top:12px">重新读取</button>
+      </div>
+
+      <div id="batchStep3" class="card" style="display:none">
+        <div class="card-title">③ 字段映射 <span class="card-hint">系统已智能匹配，请核对；留空表示该字段不填</span></div>
+        <div class="row" style="margin-bottom:12px;gap:8px">
+          <select id="savedMapping" class="select" style="min-width:180px"><option value="">— 载入已保存的映射 —</option></select>
+          <button id="btnSaveMapping" class="btn btn-sm">保存当前映射</button>
+          <button id="btnDeleteMapping" class="btn btn-sm btn-danger">删除所选映射</button>
+        </div>
+        <div id="batchMapping" class="form-grid"></div>
+        <div class="section-title" style="margin-top:18px">数据预览（前 3 行）</div>
+        <div id="batchPreview" class="preview-wrap"></div>
+      </div>
+
+      <div id="batchStep4" class="card" style="display:none">
+        <div class="card-title">④ 选择模板并生成</div>
+        <div class="row"><label class="inline-label">引用模板：</label><select id="batchTemplate" class="select"></select></div>
+        <div class="row" style="margin-top:20px">
+          <button id="btnBatchGenerate" class="btn btn-primary btn-lg">批量生成并打包下载</button>
+        </div>
+        <div id="batchStatus" class="info-line" style="display:none"></div>
+      </div>
+    </section>
+
+    <!-- 模板管理 -->
+    <section id="view-templates" class="view">
+      <header class="page-head"><h1>模板管理</h1><p>管理模板文件、字段映射、固定内容和各国差异化配置</p></header>
+      <div class="card">
+        <div class="row" style="justify-content:space-between">
+          <div class="card-title" style="margin:0">模板列表</div>
+          <button id="btnAddTemplate" class="btn btn-primary">+ 新建模板</button>
+        </div>
+        <div id="templateList" class="tpl-list"></div>
+      </div>
+    </section>
+
+    <!-- 历史记录 -->
+    <section id="view-history" class="view">
+      <header class="page-head"><h1>生成记录</h1><p>本地保存的发票生成历史</p></header>
+      <div class="card">
+        <div class="row" style="justify-content:space-between;margin-bottom:16px">
+          <div id="storageInfo" class="storage-info"></div>
+          <div class="row" style="gap:8px">
+            <button id="btnClearOldRecords" class="btn btn-sm">清理 30 天前的记录</button>
+            <button id="btnClearAllRecords" class="btn btn-sm btn-danger">清空全部记录</button>
+          </div>
+        </div>
+        <div id="historyList"></div>
+      </div>
+    </section>
+
+    <!-- 设置 -->
+    <section id="view-settings" class="view">
+      <header class="page-head"><h1>设置</h1><p>识别与生成偏好，可修改或新增自定义项</p></header>
+      <div class="card">
+        <div class="card-title">内置偏好</div>
+        <div id="builtinSettings"></div>
+        <button id="btnSaveSettings" class="btn btn-primary" style="margin-top:16px">保存内置偏好</button>
+      </div>
+      <div class="card">
+        <div class="row" style="justify-content:space-between">
+          <div class="card-title" style="margin:0">自定义偏好项</div>
+          <button id="btnAddSetting" class="btn btn-sm btn-primary">+ 新增设置项</button>
+        </div>
+        <p class="hint">可记录团队自己的偏好（如默认申报货值、常用备注等），会保存在本地浏览器。</p>
+        <div id="customSettings"></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<!-- 模板编辑弹窗 -->
+<div id="tplEditor" class="modal" style="display:none">
+  <div class="modal-mask" onclick="closeTplEditor()"></div>
+  <div class="modal-box">
+    <div class="modal-head"><h2 id="tplEditorTitle">编辑模板</h2><button class="modal-close" onclick="closeTplEditor()">×</button></div>
+    <div class="modal-body">
+      <input type="hidden" id="tplEditId">
+      <div class="form-grid">
+        <label class="form-field"><span>模板名称</span><input type="text" id="tplName"></label>
+        <label class="form-field"><span>适用国家代码</span><input type="text" id="tplCountry" placeholder="如 GB"></label>
+        <label class="form-field"><span>工作表名</span><input type="text" id="tplSheet" placeholder="如 箱单发票"></label>
+        <label class="form-field"><span>文件名规则</span><input type="text" id="tplFileRule" placeholder="{platformOrder}-KL.xlsx"></label>
+      </div>
+      <div class="modal-section">
+        <div class="section-title">模板文件</div>
+        <input type="file" id="tplFileInput" accept=".xlsx,.xls">
+        <p class="hint">内置模板可直接使用；上传新文件会覆盖当前模板关联的 Excel。</p>
+      </div>
+      <div class="modal-section">
+        <div class="section-title">可视化点选（识别不准时手动指定）</div>
+        <button type="button" class="btn btn-sm" id="btnPreviewTpl">加载模板预览</button>
+        <p class="hint">加载后点击任意单元格，可把它指定为某个字段、设置保留前缀，或标记为固定内容。</p>
+        <div id="tplPreview"></div>
+      </div>
+      <div class="modal-section">
+        <div class="section-title">字段 → 单元格映射</div>
+        <div id="tplCellMap"></div>
+      </div>
+      <div class="modal-section">
+        <div class="section-title">固定内容（单元格 → 值）</div>
+        <div id="tplFixedValues"></div>
+      </div>
+      <div class="modal-section">
+        <div class="section-title">按国家差异化配置（申报货值等）</div>
+        <div id="tplOverrides"></div>
+        <button class="btn btn-sm" onclick="document.getElementById('tplOverrides').insertAdjacentHTML('beforeend','<div class=&quot;ov-group&quot;><div class=&quot;ov-head&quot;>国家代码：<input type=&quot;text&quot; class=&quot;ov-country&quot; placeholder=&quot;如 GB&quot;><button class=&quot;btn btn-sm btn-danger&quot; onclick=&quot;this.parentElement.parentElement.remove()&quot;>删除组</button></div><div class=&quot;ov-values&quot;></div><button class=&quot;btn btn-sm&quot; onclick=&quot;addOvItem(this)&quot;>+ 添加单元格</button></div>')">+ 添加国家</button>
+      </div>
+      <div class="modal-section">
+        <label class="form-field"><span>备注</span><input type="text" id="tplNotes"></label>
+      </div>
+    </div>
+    <div class="modal-foot"><button id="btnCloseTpl" class="btn btn-outline">取消</button><button id="btnSaveTpl" class="btn btn-primary">保存配置</button></div>
+  </div>
+</div>
+
+<div id="toastBox" class="toast-box"></div>
+</body>
+</html>
